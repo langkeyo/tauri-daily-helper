@@ -1,0 +1,498 @@
+use rusqlite::{Connection, Result};
+use std::fs;
+use std::{thread, time::Duration};
+use chrono::{Datelike, Timelike};
+use handlebars::Handlebars;
+use serde::{Deserialize, Serialize};
+use calamine::{Reader, Xlsx, open_workbook, DataType};
+use xlsxwriter::Workbook;
+use xlsxwriter::format::{self, Color};
+use tempfile::Builder;
+use tauri_plugin_dialog::DialogExt;
+
+#[derive(Serialize, Deserialize)]
+pub struct Task {
+    pub task: String,
+    pub status: String,
+    pub remarks: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ReportTemplate {
+    pub tasks: Vec<Task>,
+    pub next_week_plan: String,
+}
+
+pub fn init_db() -> Result<Connection> {
+    let conn = Connection::open("daily.db")?;
+
+    // 检查表结构是否有UNIQUE约束
+    let mut need_migrate = false;
+    {
+        let pragma = conn.prepare("PRAGMA table_info(dailies)");
+        if let Ok(mut stmt) = pragma {
+            let columns: Vec<String> = stmt
+                .query_map([], |row| row.get::<_, String>(1))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap_or_default();
+            if columns.contains(&"date".to_string()) {
+                // 检查UNIQUE约束
+                let idx: i64 = conn
+                    .prepare("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND tbl_name='dailies' AND sql LIKE '%UNIQUE%'")
+                    .unwrap()
+                    .query_row([], |row| row.get(0))
+                    .unwrap_or(0);
+                if idx > 0 {
+                    need_migrate = true;
+                }
+            }
+        }
+    }
+
+    if need_migrate {
+        // 1. 备份旧数据
+        let mut old_rows = Vec::new();
+        {
+            let mut stmt = conn.prepare("SELECT date, content, should, done, undone FROM dailies").unwrap();
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1).ok(),
+                        row.get::<_, String>(2).ok(),
+                        row.get::<_, String>(3).ok(),
+                        row.get::<_, String>(4).ok(),
+                    ))
+                })
+                .unwrap();
+            for row in rows {
+                let (date, content, should, done, undone) = row.unwrap();
+                old_rows.push((date, content, should, done, undone));
+            }
+        }
+        // 2. 删除原表
+        conn.execute("DROP TABLE dailies", []).unwrap();
+        // 3. 创建新表
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS dailies (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                content TEXT,
+                should TEXT,
+                done TEXT,
+                undone TEXT
+            )",
+            [],
+        )?;
+        // 4. 导入旧数据
+        for (date, content, should, done, undone) in old_rows {
+            conn.execute(
+                "INSERT INTO dailies (date, content, should, done, undone) VALUES (?1, ?2, ?3, ?4, ?5)",
+                [
+                    &date,
+                    &content.unwrap_or_default(),
+                    &should.unwrap_or_default(),
+                    &done.unwrap_or_default(),
+                    &undone.unwrap_or_default(),
+                ],
+            ).unwrap();
+        }
+    } else {
+        // 新表结构直接创建
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS dailies (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                content TEXT,
+                should TEXT,
+                done TEXT,
+                undone TEXT
+            )",
+            [],
+        )?;
+    }
+
+    // 自动补字段（防止老库升级）
+    {
+        let columns = conn.prepare("PRAGMA table_info(dailies)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<Result<Vec<_>, _>>()?;
+        if !columns.contains(&"should".to_string()) {
+            conn.execute("ALTER TABLE dailies ADD COLUMN should TEXT", [])?;
+        }
+        if !columns.contains(&"done".to_string()) {
+            conn.execute("ALTER TABLE dailies ADD COLUMN done TEXT", [])?;
+        }
+        if !columns.contains(&"undone".to_string()) {
+            conn.execute("ALTER TABLE dailies ADD COLUMN undone TEXT", [])?;
+        }
+    }
+    Ok(conn)
+}
+
+#[tauri::command]
+pub fn save_daily(
+    date: String,
+    content: String,
+    should: String,
+    done: String,
+    undone: String
+) -> Result<(), String> {
+    let conn = init_db().map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT INTO dailies (date, content, should, done, undone) VALUES (?1, ?2, ?3, ?4, ?5)",
+        [date, content, should, done, undone],
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn auto_generate_weekly() -> Result<(), String> {
+    let conn = init_db().map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare(
+        "SELECT date, should, done, undone FROM dailies WHERE date >= date('now', '-7 days') ORDER BY date ASC, id ASC"
+    ).map_err(|e| e.to_string())?;
+
+    let template = std::fs::read_to_string("template.md").unwrap_or("{{date}}\n应完成：{{should}}\n已完成：{{done}}\n未完成：{{undone}}\n".to_string());
+    let mut handlebars = Handlebars::new();
+    handlebars
+        .register_template_string("tpl", template)
+        .map_err(|e| e.to_string())?;
+
+    let mut weekly = String::new();
+    let rows = stmt
+        .query_map([], |row| {
+            let date: String = row.get(0)?;
+            let should: Option<String> = row.get(1)?;
+            let done: Option<String> = row.get(2)?;
+            let undone: Option<String> = row.get(3)?;
+            Ok((
+                date,
+                should.unwrap_or_default(),
+                done.unwrap_or_default(),
+                undone.unwrap_or_default()
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+
+    for row in rows {
+        let (date, should, done, undone) = row.map_err(|e| e.to_string())?;
+        let data = serde_json::json!({
+            "date": date,
+            "should": should,
+            "done": done,
+            "undone": undone
+        });
+        let rendered = handlebars.render("tpl", &data).map_err(|e| e.to_string())?;
+        weekly.push_str(&rendered);
+        weekly.push_str("\n\n");
+    }
+
+    std::fs::write("weekly.md", weekly).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn read_text_file(path: String) -> Result<String, String> {
+    std::fs::read_to_string(path).map_err(|e| e.to_string())
+}
+
+pub fn start_weekly_timer() {
+    thread::spawn(|| {
+        loop {
+            // 每周日凌晨1点自动生成周报
+            let now = chrono::Local::now();
+            if now.weekday() == chrono::Weekday::Sun && now.hour() == 1 && now.minute() == 0 {
+                let _ = auto_generate_weekly();
+            }
+            thread::sleep(Duration::from_secs(60)); // 每分钟检查一次
+        }
+    });
+}
+
+#[tauri::command]
+pub fn save_template(content: String) -> Result<(), String> {
+    std::fs::write("template.md", content).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn read_template() -> Result<String, String> {
+    std::fs::read_to_string("template.md").map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn render_daily_with_template(
+    date: String,
+    should: String,
+    done: String,
+    undone: String
+) -> Result<String, String> {
+    let template = std::fs::read_to_string("template.md").map_err(|e| e.to_string())?;
+    let mut handlebars = Handlebars::new();
+    handlebars
+        .register_template_string("tpl", template)
+        .map_err(|e| e.to_string())?;
+    let data = serde_json::json!({
+        "date": date,
+        "should": should,
+        "done": done,
+        "undone": undone
+    });
+    handlebars.render("tpl", &data).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn parse_excel_template(excel_data: Vec<u8>) -> Result<ReportTemplate, String> {
+    // 创建临时文件
+    let temp_dir = Builder::new().prefix("excel_template").tempdir()
+        .map_err(|e| format!("无法创建临时目录: {}", e))?;
+    let temp_path = temp_dir.path().join("template.xlsx");
+    
+    // 写入Excel数据到临时文件
+    fs::write(&temp_path, &excel_data)
+        .map_err(|e| format!("写入临时文件失败: {}", e))?;
+    
+    // 使用calamine打开Excel文件
+    let mut workbook: Xlsx<_> = open_workbook(&temp_path)
+        .map_err(|e| format!("打开Excel文件失败: {}", e))?;
+    
+    let sheet_name = workbook.sheet_names().get(0)
+        .ok_or("Excel文件没有工作表".to_string())?
+        .clone();
+    
+    let range = workbook.worksheet_range(&sheet_name)
+        .map_err(|e| format!("无法读取工作表: {}", e))?;
+    
+    // 解析Excel内容
+    let mut tasks = Vec::new();
+    let mut next_week_plan = String::new();
+    
+    // 从第2行开始读取任务（假设第1行是表头）
+    for row_idx in 1..range.height() {
+        // 确保行有足够的单元格
+        if range.width() >= 3 {
+            let task = range.get((row_idx, 0))
+                .and_then(|v| v.get_string())
+                .unwrap_or_default()
+                .to_string();
+            
+            // 如果是空行或者看起来像小标题，则跳过
+            if task.is_empty() || (task.len() < 10 && task.ends_with(':')) {
+                continue;
+            }
+            
+            let status = range.get((row_idx, 1))
+                .and_then(|v| v.get_string())
+                .unwrap_or("进行中")
+                .to_string();
+            
+            let remarks = range.get((row_idx, 2))
+                .and_then(|v| v.get_string())
+                .unwrap_or_default()
+                .to_string();
+            
+            tasks.push(Task {
+                task,
+                status,
+                remarks,
+            });
+        }
+    }
+    
+    // 尝试查找下周计划（通常在最后几行）
+    for row_idx in 1..range.height() {
+        let first_cell = range.get((row_idx, 0))
+            .and_then(|v| v.get_string())
+            .unwrap_or_default();
+        
+        if first_cell.contains("下周") || first_cell.contains("计划") {
+            // 如果找到下周计划标题，读取下一行的内容
+            if row_idx + 1 < range.height() {
+                next_week_plan = range.get((row_idx + 1, 0))
+                    .and_then(|v| v.get_string())
+                    .unwrap_or_default()
+                    .to_string();
+                break;
+            }
+        }
+    }
+    
+    Ok(ReportTemplate {
+        tasks,
+        next_week_plan,
+    })
+}
+
+#[tauri::command]
+pub fn generate_excel_report(
+    app_handle: tauri::AppHandle,
+    start_date: String,
+    end_date: String,
+    tasks: Vec<Task>,
+    next_week_plan: String,
+) -> Result<(), String> {
+    // 文件名建议
+    let suggested_filename = format!("周报_{}_至_{}.xlsx", start_date, end_date);
+    
+    // 创建临时文件目录，但不让它自动删除
+    let temp_file_path = std::env::temp_dir().join(&suggested_filename);
+    let temp_path_str = temp_file_path.to_str().ok_or("路径转换失败")?.to_string();
+    
+    // 创建Excel文件
+    let workbook = Workbook::new(&temp_path_str)
+        .map_err(|e| format!("创建Excel文件失败: {}", e))?;
+    
+    // 创建工作表
+    let mut sheet = workbook.add_worksheet(Some("周报"))
+        .map_err(|e| format!("创建工作表失败: {}", e))?;
+    
+    // 设置列宽
+    sheet.set_column(0, 0, 40.0, None)
+        .map_err(|e| format!("设置列宽失败: {}", e))?;
+    sheet.set_column(1, 1, 12.0, None)
+        .map_err(|e| format!("设置列宽失败: {}", e))?;
+    sheet.set_column(2, 2, 25.0, None)
+        .map_err(|e| format!("设置列宽失败: {}", e))?;
+    
+    // 添加标题和表头
+    let mut title_format = format::Format::new();
+    title_format.set_bold();
+    title_format.set_font_size(14.0);
+    title_format.set_align(format::FormatAlignment::Center);
+    
+    let mut header_format = format::Format::new();
+    header_format.set_bold();
+    header_format.set_bg_color(Color::Gray);
+    header_format.set_font_color(Color::White);
+    
+    // 周报标题
+    sheet.merge_range(0, 0, 0, 2, &format!("工作周报 ({} 至 {})", start_date, end_date), Some(&title_format))
+        .map_err(|e| format!("写入标题失败: {}", e))?;
+    
+    // 表头
+    sheet.write_string(2, 0, "工作内容", Some(&header_format))
+        .map_err(|e| format!("写入表头失败: {}", e))?;
+    sheet.write_string(2, 1, "状态", Some(&header_format))
+        .map_err(|e| format!("写入表头失败: {}", e))?;
+    sheet.write_string(2, 2, "备注", Some(&header_format))
+        .map_err(|e| format!("写入表头失败: {}", e))?;
+    
+    // 写入任务
+    for (i, task) in tasks.iter().enumerate() {
+        let row = i as u32 + 3; // 从第4行开始写入任务
+        
+        sheet.write_string(row, 0, &task.task, None)
+            .map_err(|e| format!("写入任务失败: {}", e))?;
+        sheet.write_string(row, 1, &task.status, None)
+            .map_err(|e| format!("写入状态失败: {}", e))?;
+        sheet.write_string(row, 2, &task.remarks, None)
+            .map_err(|e| format!("写入备注失败: {}", e))?;
+    }
+    
+    // 下周计划
+    let next_week_row = tasks.len() as u32 + 5;
+    let mut plan_title_format = format::Format::new();
+    plan_title_format.set_bold();
+    
+    sheet.write_string(next_week_row, 0, "下周工作计划", Some(&plan_title_format))
+        .map_err(|e| format!("写入下周计划标题失败: {}", e))?;
+    sheet.merge_range(next_week_row + 1, 0, next_week_row + 1, 2, &next_week_plan, None)
+        .map_err(|e| format!("写入下周计划内容失败: {}", e))?;
+    
+    // 关闭工作簿，写入临时文件
+    workbook.close().map_err(|e| format!("保存Excel文件失败: {}", e))?;
+    
+    // 使用tauri-plugin-dialog进行文件保存对话框
+    let dialog = app_handle.dialog();
+    let file_path = dialog.file()
+        .add_filter("Excel文件", &["xlsx"])
+        .set_file_name(&suggested_filename)
+        .save_file();
+    
+    match file_path {
+        Some(path) => {
+            // 将临时文件复制到用户选择的位置
+            if let Err(e) = std::fs::copy(&temp_path_str, path) {
+                return Err(format!("保存文件失败: {}", e));
+            }
+            // 删除临时文件
+            let _ = std::fs::remove_file(&temp_path_str);
+            Ok(())
+        },
+        None => Err("用户取消了文件保存".to_string())
+    }
+}
+
+#[tauri::command]
+pub fn save_report_template(tasks: Vec<Task>, next_week_plan: String) -> Result<(), String> {
+    let template = ReportTemplate {
+        tasks,
+        next_week_plan,
+    };
+    
+    let json = serde_json::to_string_pretty(&template)
+        .map_err(|e| format!("序列化模板失败: {}", e))?;
+    
+    fs::write("report_template.json", json)
+        .map_err(|e| format!("保存模板失败: {}", e))?;
+    
+    Ok(())
+}
+
+#[tauri::command]
+pub fn load_report_template() -> Result<ReportTemplate, String> {
+    let json = fs::read_to_string("report_template.json")
+        .map_err(|e| format!("读取模板失败: {}", e))?;
+    
+    serde_json::from_str(&json)
+        .map_err(|e| format!("解析模板失败: {}", e))
+}
+
+#[tauri::command]
+pub fn import_excel_tasks(file_path: String) -> Result<Vec<Task>, String> {
+    let mut workbook: Xlsx<_> = open_workbook(&file_path)
+        .map_err(|e| format!("无法打开Excel文件: {}", e))?;
+    
+    let sheet_name = workbook.sheet_names().get(0)
+        .ok_or_else(|| "Excel文件中没有工作表".to_string())?
+        .clone();
+    
+    let range = workbook.worksheet_range(&sheet_name)
+        .ok_or_else(|| "无法读取工作表".to_string())?
+        .map_err(|e| format!("读取工作表出错: {}", e))?;
+    
+    let mut tasks = Vec::new();
+    
+    // 从第2行开始读取数据（跳过标题行）
+    for row_idx in 1..range.height() {
+        if row_idx < range.height() {
+            let task_content = match range.get((row_idx, 0)) {
+                Some(DataType::String(s)) => s.clone(),
+                Some(DataType::Float(f)) => f.to_string(),
+                Some(DataType::Int(i)) => i.to_string(),
+                Some(_) | None => continue,
+            };
+            
+            let status = match range.get((row_idx, 1)) {
+                Some(DataType::String(s)) => s.clone(),
+                Some(_) | None => "进行中".to_string(),
+            };
+            
+            let remarks = match range.get((row_idx, 2)) {
+                Some(DataType::String(s)) => s.clone(),
+                Some(_) | None => "".to_string(),
+            };
+            
+            tasks.push(Task {
+                id: 0, // ID将在保存到数据库时自动分配
+                date: String::new(), // 日期需要由调用方指定
+                task: task_content,
+                status,
+                remarks,
+            });
+        }
+    }
+    
+    Ok(tasks)
+} 
