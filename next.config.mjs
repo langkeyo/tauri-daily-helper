@@ -5,11 +5,19 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const isProd = process.env.NODE_ENV === 'production';
+const repoName = 'tauri-daily-helper';
 
 const nextConfig = {
   reactStrictMode: true,
   // Output as a static site for Tauri
   output: 'export',
+  // For GitHub Pages - set base path to repo name in production
+  basePath: isProd ? `/${repoName}` : '',
+  // 必须为静态网站禁用图片优化
+  images: {
+    unoptimized: true,
+  },
   // Disable type checking during build (will help bypass the binary file issue)
   typescript: {
     // Disable type checking since we're having issues with binary files

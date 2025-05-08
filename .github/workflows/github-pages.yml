@@ -1,0 +1,40 @@
+name: GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm install
+      
+      - name: Configure Next.js for GitHub Pages
+        run: |
+          # 确保.nojekyll文件存在，防止GitHub Pages忽略以下划线开头的文件
+          touch out/.nojekyll
+          # 将网站基本路径设置为仓库名称
+          echo "export const basePath = '/tauri-daily-helper';" > basepath.js
+      
+      - name: Build website
+        run: npm run build
+        
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./out
+          force_orphan: true # 使用干净的新分支，不保留历史提交 
