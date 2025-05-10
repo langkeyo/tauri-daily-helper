@@ -55,6 +55,16 @@ npm run tauri build -- --target universal-apple-darwin
 1. 修改版本号：更新`src-tauri/tauri.conf.json`中的`version`字段
 2. 创建发布标签：`git tag v0.1.0`并推送到GitHub
 3. GitHub Actions将自动构建所有平台的安装包并创建发布草稿
+4. 所有平台的安装包会自动发布到主仓库的Releases页面
+5. 同时，会自动将安装包复制到[分发仓库](https://github.com/langkeyo/tauri-daily-helper-releases)中
+
+### 获取macOS安装包
+
+即使在Windows环境下开发，您也可以通过以下方式获取macOS安装包：
+
+1. 完成上述发布流程后，等待GitHub Actions完成构建（约10-20分钟）
+2. 前往[分发仓库](https://github.com/langkeyo/tauri-daily-helper-releases)的`macos`目录
+3. 下载最新的`.dmg`安装包文件
 
 ## 许可证
 

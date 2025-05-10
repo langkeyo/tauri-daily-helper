@@ -1,0 +1,57 @@
+name: "发布到分发仓库"
+on:
+  workflow_run:
+    workflows: ["Tauri多平台发布"]
+    types:
+      - completed
+
+jobs:
+  copy-to-releases-repo:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - name: 下载构建产物
+        uses: dawidd6/action-download-artifact@v2
+        with:
+          workflow: publish.yml
+          workflow_conclusion: success
+          name: "*"
+          path: artifacts
+      
+      - name: 获取版本号和标签
+        id: get_version
+        run: |
+          # 提取版本号从标签名称 (v1.0.0 -> 1.0.0)
+          echo "VERSION=$(echo ${{ github.event.workflow_run.head_branch }} | sed 's/v//')" >> $GITHUB_OUTPUT
+          echo "TAG=${{ github.event.workflow_run.head_branch }}" >> $GITHUB_OUTPUT
+      
+      - name: 检出分发仓库
+        uses: actions/checkout@v3
+        with:
+          repository: langkeyo/tauri-daily-helper-releases
+          token: ${{ secrets.PAT_TOKEN }}
+          path: release-repo
+      
+      - name: 整理并复制文件到分发仓库
+        run: |
+          mkdir -p release-repo/windows
+          mkdir -p release-repo/macos
+          mkdir -p release-repo/linux
+          
+          # 复制Windows安装包
+          find artifacts -name "*.msi" -o -name "*.exe" | xargs -I{} cp {} release-repo/windows/
+          
+          # 复制macOS安装包
+          find artifacts -name "*.dmg" -o -name "*.app.tar.gz" | xargs -I{} cp {} release-repo/macos/
+          
+          # 复制Linux安装包
+          find artifacts -name "*.AppImage" -o -name "*.deb" | xargs -I{} cp {} release-repo/linux/
+      
+      - name: 提交到分发仓库
+        run: |
+          cd release-repo
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add .
+          git commit -m "添加版本 ${{ steps.get_version.outputs.TAG }} 的安装包"
+          git push 
