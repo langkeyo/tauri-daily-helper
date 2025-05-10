@@ -5,6 +5,10 @@ on:
       - 'v*'
   workflow_dispatch:  # 允许手动触发工作流
 
+# 添加权限配置
+permissions:
+  contents: write
+
 jobs:
   publish-tauri:
     strategy:
