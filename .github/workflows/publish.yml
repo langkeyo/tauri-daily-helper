@@ -26,6 +26,10 @@ jobs:
       - name: 安装Rust
         uses: dtolnay/rust-toolchain@stable
       
+      - name: 安装 x86_64-apple-darwin target
+        if: matrix.platform == 'macos-latest'
+        run: rustup target add x86_64-apple-darwin
+      
       - name: 安装Rust缓存
         uses: Swatinem/rust-cache@v2
         with:
