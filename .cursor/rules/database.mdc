@@ -1,0 +1,284 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# Tauri Daily Helper 数据库设计
+
+## 概述
+
+Tauri Daily Helper 应用采用双数据库策略：
+1. **本地数据库**：使用 SQLite，通过 Tauri 的 SQL 插件访问
+2. **远程数据库**：使用 Supabase 提供的 PostgreSQL 服务
+
+本文档详细描述数据库表结构、关系和索引设计。
+
+## 数据库表设计
+
+### 用户表 (users)
+
+存储用户基本信息。
+
+```sql
+CREATE TABLE users (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    email VARCHAR(255) NOT NULL UNIQUE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    last_login TIMESTAMP WITH TIME ZONE,
+    settings JSONB DEFAULT '{}'::jsonb,
+    is_active BOOLEAN DEFAULT TRUE
+);
+
+-- 索引
+CREATE INDEX idx_users_email ON users(email);
+```
+
+### 项目表 (projects)
+
+用于组织任务的项目或分类。
+
+```sql
+CREATE TABLE projects (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name VARCHAR(100) NOT NULL,
+    description TEXT,
+    color VARCHAR(20) DEFAULT '#4299E1',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    is_archived BOOLEAN DEFAULT FALSE
+);
+
+-- 索引
+CREATE INDEX idx_projects_user_id ON projects(user_id);
+```
+
+### 任务表 (tasks)
+
+存储用户的待办任务。
+
+```sql
+CREATE TABLE tasks (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    project_id UUID REFERENCES projects(id) ON DELETE SET NULL,
+    title VARCHAR(255) NOT NULL,
+    description TEXT,
+    status VARCHAR(20) NOT NULL DEFAULT 'todo' CHECK (status IN ('todo', 'in_progress', 'done')),
+    priority VARCHAR(10) NOT NULL DEFAULT 'medium' CHECK (priority IN ('low', 'medium', 'high')),
+    due_date TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    tags TEXT[] DEFAULT '{}',
+    is_deleted BOOLEAN DEFAULT FALSE
+);
+
+-- 索引
+CREATE INDEX idx_tasks_user_id ON tasks(user_id);
+CREATE INDEX idx_tasks_project_id ON tasks(project_id);
+CREATE INDEX idx_tasks_status ON tasks(status);
+CREATE INDEX idx_tasks_due_date ON tasks(due_date);
+```
+
+### 任务附件表 (task_attachments)
+
+存储任务相关的文件附件。
+
+```sql
+CREATE TABLE task_attachments (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    file_name VARCHAR(255) NOT NULL,
+    file_path VARCHAR(512) NOT NULL,
+    file_type VARCHAR(100),
+    file_size INTEGER,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 索引
+CREATE INDEX idx_task_attachments_task_id ON task_attachments(task_id);
+```
+
+### 笔记本表 (notebooks)
+
+用于组织笔记的分类。
+
+```sql
+CREATE TABLE notebooks (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name VARCHAR(100) NOT NULL,
+    description TEXT,
+    color VARCHAR(20) DEFAULT '#38B2AC',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    is_archived BOOLEAN DEFAULT FALSE
+);
+
+-- 索引
+CREATE INDEX idx_notebooks_user_id ON notebooks(user_id);
+```
+
+### 笔记表 (notes)
+
+存储用户的笔记内容。
+
+```sql
+CREATE TABLE notes (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    notebook_id UUID REFERENCES notebooks(id) ON DELETE SET NULL,
+    title VARCHAR(255) NOT NULL,
+    content TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    tags TEXT[] DEFAULT '{}',
+    is_pinned BOOLEAN DEFAULT FALSE,
+    is_deleted BOOLEAN DEFAULT FALSE
+);
+
+-- 索引
+CREATE INDEX idx_notes_user_id ON notes(user_id);
+CREATE INDEX idx_notes_notebook_id ON notes(notebook_id);
+CREATE INDEX idx_notes_title_content ON notes USING GIN (to_tsvector('english', title || ' ' || COALESCE(content, '')));
+```
+
+### 笔记附件表 (note_attachments)
+
+存储笔记相关的文件附件。
+
+```sql
+CREATE TABLE note_attachments (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    note_id UUID NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+    file_name VARCHAR(255) NOT NULL,
+    file_path VARCHAR(512) NOT NULL,
+    file_type VARCHAR(100),
+    file_size INTEGER,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 索引
+CREATE INDEX idx_note_attachments_note_id ON note_attachments(note_id);
+```
+
+### 习惯表 (habits)
+
+存储用户要追踪的习惯。
+
+```sql
+CREATE TABLE habits (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name VARCHAR(255) NOT NULL,
+    description TEXT,
+    frequency VARCHAR(20) NOT NULL DEFAULT 'daily' CHECK (frequency IN ('daily', 'weekly', 'custom')),
+    frequency_config JSONB DEFAULT '{}'::jsonb,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    is_archived BOOLEAN DEFAULT FALSE
+);
+
+-- 索引
+CREATE INDEX idx_habits_user_id ON habits(user_id);
+```
+
+### 习惯记录表 (habit_logs)
+
+记录用户习惯的完成情况。
+
+```sql
+CREATE TABLE habit_logs (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    habit_id UUID NOT NULL REFERENCES habits(id) ON DELETE CASCADE,
+    date DATE NOT NULL,
+    completed BOOLEAN NOT NULL DEFAULT FALSE,
+    notes TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 索引
+CREATE INDEX idx_habit_logs_habit_id ON habit_logs(habit_id);
+CREATE INDEX idx_habit_logs_date ON habit_logs(date);
+CREATE UNIQUE INDEX idx_habit_logs_habit_id_date ON habit_logs(habit_id, date);
+```
+
+### 同步状态表 (sync_status)
+
+记录各设备的同步状态。
+
+```sql
+CREATE TABLE sync_status (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    device_id VARCHAR(255) NOT NULL,
+    last_sync_timestamp TIMESTAMP WITH TIME ZONE,
+    sync_version INTEGER DEFAULT 1,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 索引
+CREATE INDEX idx_sync_status_user_id ON sync_status(user_id);
+CREATE UNIQUE INDEX idx_sync_status_user_id_device_id ON sync_status(user_id, device_id);
+```
+
+## 数据库关系图
+
+```
+┌─────────────┐       ┌─────────────┐       ┌─────────────┐
+│             │       │             │       │             │
+│    users    │◄──────┤   projects  │◄──────┤    tasks    │
+│             │       │             │       │             │
+└─────────────┘       └─────────────┘       └─────┬───────┘
+      ▲                                          │
+      │                                          │
+      │                                          ▼
+┌─────┴───────┐       ┌─────────────┐       ┌─────────────┐
+│             │       │             │       │     task    │
+│   habits    │       │ habit_logs  │       │ attachments │
+│             │◄──────┤             │       │             │
+└─────────────┘       └─────────────┘       └─────────────┘
+      ▲
+      │
+      │
+┌─────┴───────┐       ┌─────────────┐       ┌─────────────┐
+│             │       │             │       │             │
+│  notebooks  │◄──────┤    notes    │◄──────┤     note    │
+│             │       │             │       │ attachments │
+└─────────────┘       └─────────────┘       └─────────────┘
+```
+
+## 数据迁移策略
+
+1. **版本控制**：每个数据库模式变更都有版本号
+2. **向前兼容**：确保新版本应用可以读取旧版本数据
+3. **数据备份**：在执行迁移前自动备份数据
+4. **回滚机制**：支持在迁移失败时回滚到之前版本
+
+## 同步策略
+
+### 本地数据库与远程数据库同步
+
+1. **双向同步**：本地和远程数据库之间的双向同步
+2. **增量同步**：只同步自上次同步以来变更的数据
+3. **冲突解决**：
+   - 使用时间戳和版本号检测冲突
+   - 默认采用"最新胜出"策略
+   - 对于复杂冲突，提供用户选择界面
+
+### 离线支持
+
+1. **本地优先**：所有操作首先在本地数据库执行
+2. **操作日志**：记录离线期间的所有操作
+3. **自动同步**：网络连接恢复后自动同步数据
+
+## 性能优化
+
+1. **索引策略**：为常用查询添加适当索引
+2. **分页查询**：大数据集使用分页加载
+3. **缓存**：频繁访问的数据使用内存缓存
+4. **批量操作**：批量处理多个数据变更
+5. **数据清理**：定期清理或归档旧数据
+
+

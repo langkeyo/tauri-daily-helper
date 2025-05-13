@@ -1,0 +1,72 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# Tauri Daily Helper 项目文档索引
+
+## 项目概述
+
+Tauri Daily Helper 是一款跨平台桌面应用，旨在帮助用户管理日常任务、记录笔记和追踪习惯。应用采用 Tauri 框架开发，结合了 Rust 的性能与安全性和现代 Web 前端技术的灵活性。
+
+## 文档目录
+
+### 1. 需求文档
+
+- [产品需求文档](mdc:prd.mdc) - 详细描述项目的功能需求和目标
+- [架构设计](mdc:architecture.mdc) - 系统架构和技术选型
+- [数据库设计](mdc:database.mdc) - 数据库表结构和关系
+- [API 设计](mdc:api.mdc) - 前后端通信接口设计
+- [UI 设计](mdc:ui.mdc) - 用户界面设计和用户体验
+- [开发路线图](mdc:roadmap.mdc) - 项目开发计划和里程碑
+
+### 2. 技术规范
+
+- 前端：React + TypeScript + Tailwind CSS
+- 后端：Tauri (Rust)
+- 数据库：SQLite (本地) + Supabase (远程)
+- 构建工具：Vite
+- 部署：GitHub Actions
+
+### 3. 开发流程
+
+1. 需求分析与规划
+2. 设计（架构、数据库、API、UI）
+3. 开发实现
+4. 测试与 Bug 修复
+5. 发布与部署
+6. 维护与更新
+
+### 4. 项目管理
+
+- 版本控制：Git + GitHub
+- 项目管理：GitHub Projects
+- CI/CD：GitHub Actions
+- 文档管理：Markdown 文档
+
+## 如何使用本文档
+
+1. 从 [产品需求文档](mdc:prd.mdc) 开始，了解项目的总体目标和功能需求
+2. 参考 [架构设计](mdc:architecture.mdc) 了解系统的技术架构
+3. 查看 [数据库设计](mdc:database.mdc) 和 [API 设计](mdc:api.mdc) 了解数据结构和接口
+4. 参考 [UI 设计](mdc:ui.mdc) 了解用户界面和交互设计
+5. 根据 [开发路线图](mdc:roadmap.mdc) 了解项目的开发计划和进度
+
+## 文档维护
+
+- 所有文档使用 Markdown 格式编写
+- 文档更新应与代码变更同步
+- 重大变更需要更新相关文档并记录变更历史
+
+## 贡献指南
+
+1. Fork 项目仓库
+2. 创建功能分支
+3. 提交变更
+4. 创建 Pull Request
+5. 等待审核和合并
+
+## 许可证
+
+本项目采用 MIT 许可证
+

@@ -1,0 +1,859 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# Tauri Daily Helper API 设计
+
+## 概述
+
+Tauri Daily Helper 应用的 API 设计包含两部分：
+
+1. **Tauri 命令 API**：前端 JavaScript/TypeScript 与 Rust 后端之间的通信
+2. **Supabase API**：应用与 Supabase 云服务之间的直接通信
+
+本文档详细描述这两类 API 的设计和使用方式，特别强调了向 Supabase 数据服务的转移。
+
+## 数据存储策略变更
+
+原先使用 SQLite 本地数据库的方式可能导致应用崩溃问题，因此我们对数据存储策略进行了调整：
+
+1. **主要数据存储**：Supabase PostgreSQL
+2. **本地缓存**：浏览器原生 IndexedDB (通过 Dexie.js)
+3. **设置存储**：Tauri Store API
+
+这种方式提供了更稳定的用户体验，同时保留了离线功能支持。
+
+## Tauri 命令 API
+
+Tauri 命令是通过 IPC (进程间通信) 实现的，允许前端调用 Rust 后端的函数。在新架构中，Tauri 命令主要用于系统集成和文件操作。
+
+### 系统集成命令
+
+#### 初始化应用
+
+```typescript
+// 前端调用
+import { invoke } from '@tauri-apps/api';
+
+const initializeApp = async () => {
+  return await invoke<AppInitResult>('initialize_app');
+};
+
+// Rust 后端实现
+#[tauri::command]
+async fn initialize_app(app_handle: tauri::AppHandle) -> Result<AppInitResult, String> {
+  // 实现逻辑
+}
+```
+
+#### 获取设备信息
+
+```typescript
+// 前端调用
+const getDeviceInfo = async () => {
+  return await invoke<DeviceInfo>('get_device_info');
+};
+
+// Rust 后端实现
+#[tauri::command]
+fn get_device_info() -> Result<DeviceInfo, String> {
+  // 实现逻辑
+}
+```
+
+### 文件操作命令
+
+#### 导出数据
+
+```typescript
+// 前端调用
+const exportData = async (options: ExportOptions) => {
+  return await invoke<string>('export_data', { options });
+};
+
+// Rust 后端实现
+#[tauri::command]
+async fn export_data(
+  options: ExportOptions,
+  app_handle: tauri::AppHandle
+) -> Result<String, String> {
+  // 实现逻辑
+}
+```
+
+#### 导入数据
+
+```typescript
+// 前端调用
+const importData = async (filePath: string) => {
+  return await invoke<ImportResult>('import_data', { filePath });
+};
+
+// Rust 后端实现
+#[tauri::command]
+async fn import_data(
+  file_path: String,
+  app_handle: tauri::AppHandle
+) -> Result<ImportResult, String> {
+  // 实现逻辑
+}
+```
+
+#### 文件选择
+
+```typescript
+// 前端调用
+const selectFile = async (options: FileDialogOptions) => {
+  return await invoke<string>('select_file', { options });
+};
+
+// Rust 后端实现
+#[tauri::command]
+async fn select_file(
+  options: FileDialogOptions,
+  app_handle: tauri::AppHandle
+) -> Result<String, String> {
+  // 调用系统文件选择对话框
+}
+```
+
+### 通知命令
+
+```typescript
+// 前端调用
+const showNotification = async (title: string, body: string) => {
+  return await invoke<void>('show_notification', { title, body });
+};
+
+// Rust 后端实现
+#[tauri::command]
+async fn show_notification(
+  title: String,
+  body: String,
+  app_handle: tauri::AppHandle
+) -> Result<(), String> {
+  // 调用系统通知
+}
+```
+
+### 迁移命令
+
+```typescript
+// 前端调用
+const migrateFromSqlite = async () => {
+  return await invoke<MigrationResult>('migrate_from_sqlite');
+};
+
+// Rust 后端实现
+#[tauri::command]
+async fn migrate_from_sqlite(app_handle: tauri::AppHandle) -> Result<MigrationResult, String> {
+  // 从旧的 SQLite 数据库迁移数据
+}
+```
+
+## Supabase API
+
+应用使用 Supabase 提供的客户端库与后端服务通信。在新架构中，前端将直接与 Supabase 通信，减少对 Tauri 后端的依赖。
+
+### 客户端初始化
+
+```typescript
+// supabase.ts
+import { createClient } from '@supabase/supabase-js'
+import type { Database } from './types/supabase'
+
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
+
+export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey)
+```
+
+### 认证 API
+
+#### 用户注册
+
+```typescript
+// auth.ts
+import { supabase } from '@/lib/supabase';
+
+export async function signUp(email: string, password: string) {
+  const { data, error } = await supabase.auth.signUp({
+    email,
+    password,
+  });
+  
+  if (error) throw error;
+  return data;
+}
+```
+
+#### 用户登录
+
+```typescript
+export async function signIn(email: string, password: string) {
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email,
+    password,
+  });
+  
+  if (error) throw error;
+  return data;
+}
+```
+
+#### 用户登出
+
+```typescript
+export async function signOut() {
+  const { error } = await supabase.auth.signOut();
+  if (error) throw error;
+}
+```
+
+#### 获取当前会话
+
+```typescript
+export async function getCurrentSession() {
+  const { data: { session }, error } = await supabase.auth.getSession();
+  if (error) throw error;
+  return session;
+}
+```
+
+### 数据 API
+
+#### 数据访问层设计
+
+为了提高代码可维护性，我们创建数据访问层来封装 Supabase 操作：
+
+```typescript
+// data/tasks.ts
+import { supabase } from '@/lib/supabase';
+import type { Task, NewTask, TaskUpdate } from '@/types';
+import { db } from '@/lib/db'; // Dexie.js 数据库实例
+
+export const taskService = {
+  // 获取任务列表
+  async getTasks(filters?: TaskFilters): Promise<Task[]> {
+    try {
+      // 尝试从本地缓存获取
+      const cachedTasks = await db.tasks
+        .where('status')
+        .equals(filters?.status || 'todo')
+        .toArray();
+      
+      if (cachedTasks.length > 0) {
+        // 返回缓存结果并在后台刷新
+        this.refreshTasks(filters);
+        return cachedTasks;
+      }
+      
+      // 本地无缓存，从 Supabase 获取
+      return await this.refreshTasks(filters);
+    } catch (error) {
+      console.error('Error fetching tasks:', error);
+      throw error;
+    }
+  },
+  
+  // 从 Supabase 刷新数据并更新本地缓存
+  async refreshTasks(filters?: TaskFilters): Promise<Task[]> {
+    // 构建查询
+    let query = supabase
+      .from('tasks')
+      .select('*')
+      .eq('is_deleted', false);
+    
+    // 应用过滤条件
+    if (filters?.status) {
+      query = query.eq('status', filters.status);
+    }
+    
+    if (filters?.projectId) {
+      query = query.eq('project_id', filters.projectId);
+    }
+    
+    if (filters?.dueDateFrom) {
+      query = query.gte('due_date', filters.dueDateFrom);
+    }
+    
+    if (filters?.dueDateTo) {
+      query = query.lte('due_date', filters.dueDateTo);
+    }
+    
+    // 执行查询
+    const { data, error } = await query.order('due_date', {ascending: true});
+    
+    if (error) throw error;
+    
+    // 更新本地缓存
+    if (data && data.length > 0) {
+      await db.tasks.bulkPut(data);
+    }
+    
+    return data || [];
+  },
+  
+  // 创建新任务
+  async createTask(task: NewTask): Promise<Task> {
+    // 客户端生成 UUID
+    const newTask = {
+      ...task,
+      id: crypto.randomUUID(),
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    
+    try {
+      // 添加到本地缓存
+      await db.tasks.add(newTask as Task);
+      
+      // 发送到服务器
+      const { data, error } = await supabase
+        .from('tasks')
+        .insert(newTask)
+        .select()
+        .single();
+      
+      if (error) throw error;
+      
+      // 更新本地缓存中的记录
+      await db.tasks.put(data);
+      
+      return data;
+    } catch (error) {
+      // 记录为离线操作
+      await db.offlineActions.add({
+        table: 'tasks',
+        action: 'create',
+        data: newTask,
+        timestamp: Date.now(),
+        synced: false,
+      });
+      
+      console.error('Error creating task:', error);
+      // 仍然返回本地创建的任务
+      return newTask as Task;
+    }
+  },
+  
+  // 更新任务
+  async updateTask(taskId: string, updates: TaskUpdate): Promise<Task> {
+    const updateData = {
+      ...updates,
+      updated_at: new Date().toISOString(),
+    };
+    
+    try {
+      // 更新本地缓存
+      await db.tasks.update(taskId, updateData);
+      
+      // 发送到服务器
+      const { data, error } = await supabase
+        .from('tasks')
+        .update(updateData)
+        .eq('id', taskId)
+        .select()
+        .single();
+      
+      if (error) throw error;
+      
+      // 确保本地缓存与服务器同步
+      await db.tasks.put(data);
+      
+      return data;
+    } catch (error) {
+      // 记录为离线操作
+      await db.offlineActions.add({
+        table: 'tasks',
+        action: 'update',
+        data: { id: taskId, ...updateData },
+        timestamp: Date.now(),
+        synced: false,
+      });
+      
+      console.error('Error updating task:', error);
+      // 返回本地更新后的任务
+      return await db.tasks.get(taskId) as Task;
+    }
+  },
+  
+  // 删除任务（软删除）
+  async deleteTask(taskId: string): Promise<void> {
+    try {
+      // 本地更新
+      await db.tasks.update(taskId, { 
+        is_deleted: true,
+        updated_at: new Date().toISOString() 
+      });
+      
+      // 发送到服务器
+      const { error } = await supabase
+        .from('tasks')
+        .update({ is_deleted: true })
+        .eq('id', taskId);
+      
+      if (error) throw error;
+    } catch (error) {
+      // 记录为离线操作
+      await db.offlineActions.add({
+        table: 'tasks',
+        action: 'update',
+        data: { id: taskId, is_deleted: true },
+        timestamp: Date.now(),
+        synced: false,
+      });
+      
+      console.error('Error deleting task:', error);
+    }
+  },
+  
+  // 获取单个任务详情
+  async getTaskById(taskId: string): Promise<Task | null> {
+    try {
+      // 先查本地缓存
+      const cachedTask = await db.tasks.get(taskId);
+      if (cachedTask) return cachedTask;
+      
+      // 从服务器获取
+      const { data, error } = await supabase
+        .from('tasks')
+        .select('*')
+        .eq('id', taskId)
+        .single();
+      
+      if (error) throw error;
+      
+      // 更新本地缓存
+      if (data) {
+        await db.tasks.put(data);
+      }
+      
+      return data;
+    } catch (error) {
+      console.error('Error fetching task:', error);
+      return null;
+    }
+  }
+};
+```
+
+使用相同的模式为其他实体（笔记、习惯等）创建数据访问层。
+
+### 实时订阅
+
+利用 Supabase 实时功能自动同步数据变更：
+
+```typescript
+// realtime.ts
+import { supabase } from '@/lib/supabase';
+import { db } from '@/lib/db';
+import { getCurrentUser } from './auth';
+
+export function setupRealtimeSubscriptions() {
+  const user = getCurrentUser();
+  if (!user) return () => {}; // 未登录时不设置订阅
+  
+  // 订阅任务变更
+  const tasksSubscription = supabase
+    .channel('public:tasks')
+    .on('postgres_changes', 
+      { 
+        event: '*', 
+        schema: 'public', 
+        table: 'tasks', 
+        filter: `user_id=eq.${user.id}` 
+      },
+      async (payload) => {
+        // 处理任务变更
+        if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+          const task = payload.new;
+          await db.tasks.put(task);
+        } else if (payload.eventType === 'DELETE') {
+          await db.tasks.delete(payload.old.id);
+        }
+      }
+    )
+    .subscribe();
+  
+  // 订阅笔记变更  
+  const notesSubscription = supabase
+    .channel('public:notes')
+    .on('postgres_changes', 
+      { 
+        event: '*', 
+        schema: 'public', 
+        table: 'notes', 
+        filter: `user_id=eq.${user.id}` 
+      },
+      async (payload) => {
+        // 处理笔记变更
+        if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+          const note = payload.new;
+          await db.notes.put(note);
+        } else if (payload.eventType === 'DELETE') {
+          await db.notes.delete(payload.old.id);
+        }
+      }
+    )
+    .subscribe();
+    
+  // 订阅习惯变更
+  const habitsSubscription = supabase
+    .channel('public:habits')
+    .on('postgres_changes', 
+      { 
+        event: '*', 
+        schema: 'public', 
+        table: 'habits',
+        filter: `user_id=eq.${user.id}`
+      },
+      async (payload) => {
+        // 处理习惯变更
+        if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+          const habit = payload.new;
+          await db.habits.put(habit);
+        } else if (payload.eventType === 'DELETE') {
+          await db.habits.delete(payload.old.id);
+        }
+      }
+    )
+    .subscribe();
+  
+  // 返回清理函数
+  return () => {
+    tasksSubscription.unsubscribe();
+    notesSubscription.unsubscribe();
+    habitsSubscription.unsubscribe();
+  };
+}
+```
+
+### 同步逻辑
+
+```typescript
+// sync.ts
+import { db } from '@/lib/db';
+import { supabase } from '@/lib/supabase';
+
+// 同步控制器
+export const syncController = {
+  // 同步状态
+  isSyncing: false,
+  lastSyncTime: null,
+  
+  // 同步所有离线操作
+  async syncOfflineActions(): Promise<void> {
+    if (this.isSyncing) return;
+    
+    try {
+      this.isSyncing = true;
+      
+      // 获取所有未同步的操作
+      const actions = await db.offlineActions
+        .where('synced')
+        .equals(false)
+        .toArray();
+      
+      if (actions.length === 0) {
+        this.isSyncing = false;
+        return;
+      }
+      
+      console.log(`同步 ${actions.length} 个离线操作`);
+      
+      // 对操作按表和时间戳分组，确保顺序正确
+      const groupedActions = this.groupActionsByTable(actions);
+      
+      // 依次处理每个表的操作
+      for (const [table, tableActions] of Object.entries(groupedActions)) {
+        await this.processTableActions(table, tableActions);
+      }
+      
+      this.lastSyncTime = new Date();
+    } catch (error) {
+      console.error('同步失败:', error);
+    } finally {
+      this.isSyncing = false;
+    }
+  },
+  
+  // 按表格分组操作
+  groupActionsByTable(actions) {
+    return actions.reduce((grouped, action) => {
+      if (!grouped[action.table]) {
+        grouped[action.table] = [];
+      }
+      grouped[action.table].push(action);
+      return grouped;
+    }, {});
+  },
+  
+  // 处理一个表的所有操作
+  async processTableActions(table, actions) {
+    // 按时间戳排序
+    actions.sort((a, b) => a.timestamp - b.timestamp);
+    
+    for (const action of actions) {
+      try {
+        await this.processAction(action);
+        // 标记为已同步
+        await db.offlineActions.update(action.id, { synced: true });
+      } catch (error) {
+        console.error(`处理操作失败:`, action, error);
+        // 不中断整个同步过程
+      }
+    }
+  },
+  
+  // 处理单个操作
+  async processAction(action) {
+    const { table, action: actionType, data } = action;
+    
+    switch (actionType) {
+      case 'create':
+        await supabase.from(table).insert(data);
+        break;
+        
+      case 'update':
+        await supabase
+          .from(table)
+          .update(data)
+          .eq('id', data.id);
+        break;
+        
+      case 'delete':
+        await supabase
+          .from(table)
+          .delete()
+          .eq('id', data.id);
+        break;
+    }
+  },
+  
+  // 从服务器刷新本地缓存
+  async refreshLocalCache() {
+    // 这里可以实现增量同步，只获取上次同步后的变更
+    // 但为简单起见，我们只刷新关键数据
+    const userId = (await supabase.auth.getUser()).data.user?.id;
+    if (!userId) return;
+    
+    // 并行获取多种数据
+    await Promise.all([
+      this.refreshTasks(userId),
+      this.refreshNotes(userId),
+      this.refreshHabits(userId)
+    ]);
+  },
+  
+  // 刷新任务缓存
+  async refreshTasks(userId: string) {
+    const { data } = await supabase
+      .from('tasks')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('is_deleted', false)
+      .order('updated_at', { ascending: false })
+      .limit(100);
+      
+    if (data?.length) {
+      await db.tasks.bulkPut(data);
+    }
+  },
+  
+  // 刷新笔记缓存
+  async refreshNotes(userId: string) {
+    const { data } = await supabase
+      .from('notes')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('is_deleted', false)
+      .order('updated_at', { ascending: false })
+      .limit(50);
+      
+    if (data?.length) {
+      await db.notes.bulkPut(data);
+    }
+  },
+  
+  // 刷新习惯缓存
+  async refreshHabits(userId: string) {
+    const { data } = await supabase
+      .from('habits')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('is_archived', false);
+      
+    if (data?.length) {
+      await db.habits.bulkPut(data);
+    }
+    
+    // 再获取最近的习惯日志
+    const lastMonth = new Date();
+    lastMonth.setMonth(lastMonth.getMonth() - 1);
+    
+    const { data: logs } = await supabase
+      .from('habit_logs')
+      .select('*')
+      .gte('date', lastMonth.toISOString().split('T')[0]);
+      
+    if (logs?.length) {
+      await db.habitLogs.bulkPut(logs);
+    }
+  }
+};
+```
+
+## 错误处理
+
+所有 API 调用都应包含适当的错误处理：
+
+```typescript
+// 通用错误处理包装函数
+export async function withErrorHandling<T>(
+  operation: () => Promise<T>,
+  errorMessage: string = '操作失败'
+): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    console.error(`${errorMessage}:`, error);
+    
+    // 根据错误类型处理
+    if (error.code === 'PGRST301') {
+      // 身份验证错误
+      throw new AuthError('请先登录');
+    } else if (error.code?.startsWith('23')) {
+      // 数据库约束错误
+      throw new ValidationError('数据验证失败');
+    } else if (error.message?.includes('network')) {
+      // 网络错误
+      throw new NetworkError('网络连接失败，请稍后重试');
+    } else {
+      // 其他错误
+      throw new AppError(errorMessage);
+    }
+  }
+}
+
+// 使用示例
+async function createTask(task: NewTask): Promise<Task> {
+  return withErrorHandling(
+    () => taskService.createTask(task),
+    '创建任务失败'
+  );
+}
+```
+
+## 应用状态管理
+
+使用 Zustand 进行状态管理，与 Supabase API 集成：
+
+```typescript
+// stores/taskStore.ts
+import { create } from 'zustand';
+import { taskService } from '@/data/tasks';
+
+interface TaskState {
+  tasks: Task[];
+  loading: boolean;
+  error: string | null;
+  
+  // 操作
+  fetchTasks: (filters?: TaskFilters) => Promise<void>;
+  createTask: (task: NewTask) => Promise<void>;
+  updateTask: (id: string, updates: TaskUpdate) => Promise<void>;
+  deleteTask: (id: string) => Promise<void>;
+}
+
+export const useTaskStore = create<TaskState>((set, get) => ({
+  tasks: [],
+  loading: false,
+  error: null,
+  
+  fetchTasks: async (filters) => {
+    set({ loading: true, error: null });
+    try {
+      const tasks = await taskService.getTasks(filters);
+      set({ tasks, loading: false });
+    } catch (error) {
+      set({ error: error.message, loading: false });
+    }
+  },
+  
+  createTask: async (task) => {
+    set({ loading: true, error: null });
+    try {
+      const newTask = await taskService.createTask(task);
+      set(state => ({ 
+        tasks: [newTask, ...state.tasks],
+        loading: false 
+      }));
+    } catch (error) {
+      set({ error: error.message, loading: false });
+    }
+  },
+  
+  updateTask: async (id, updates) => {
+    set({ loading: true, error: null });
+    try {
+      const updatedTask = await taskService.updateTask(id, updates);
+      set(state => ({
+        tasks: state.tasks.map(t => t.id === id ? updatedTask : t),
+        loading: false
+      }));
+    } catch (error) {
+      set({ error: error.message, loading: false });
+    }
+  },
+  
+  deleteTask: async (id) => {
+    set({ loading: true, error: null });
+    try {
+      await taskService.deleteTask(id);
+      set(state => ({ 
+        tasks: state.tasks.filter(t => t.id !== id),
+        loading: false 
+      }));
+    } catch (error) {
+      set({ error: error.message, loading: false });
+    }
+  }
+}));
+```
+
+## API 版本控制
+
+为确保向后兼容性，API 设计包含版本控制策略：
+
+1. **Supabase API**：通过 PostgreSQL 视图提供不同版本的数据模型
+2. **Tauri 命令**：通过命令名称前缀进行版本控制（例如 `v2_export_data`）
+
+## 迁移路径
+
+从 SQLite 数据库迁移到 Supabase + IndexedDB 的路径：
+
+1. 在登录时检测是否存在本地 SQLite 数据库
+2. 如果存在，使用 Tauri 命令从 SQLite 导出数据
+3. 将数据导入 Supabase
+4. 完成后使用 IndexedDB 作为本地缓存
+
+## 安全考虑
+
+1. **认证**：使用 Supabase Auth 进行用户认证
+2. **数据验证**：前端和后端都进行数据验证
+3. **敏感数据**：敏感数据在客户端加密
+4. **访问控制**：使用 Supabase RLS 策略确保用户只能访问自己的数据
+
+## API 文档生成
+
+API 文档通过以下方式自动生成：
+
+1. **TypeScript 类型**：使用 Supabase CLI 生成完整类型定义
+2. **JSDoc 注释**：为所有函数和类型添加详细注释
+3. **API 文档生成工具**：使用 TypeDoc 生成文档网站
+
+
+
+
