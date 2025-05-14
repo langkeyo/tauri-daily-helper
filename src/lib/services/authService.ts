@@ -21,7 +21,7 @@ let _currentUser: User | null = null
 export const getCurrentUser = (): User => {
     try {
         // 如果已经有缓存的用户，直接返回
-        if (_currentUser && _currentUser.id) {
+        if (_currentUser && _currentUser.id && _currentUser.id !== 'guest') {
             // 确保currentUser属性也被设置
             if (authService) authService.currentUser = _currentUser
             return _currentUser
@@ -83,7 +83,8 @@ export const fetchCurrentUser = async (): Promise<User> => {
 
         if (error || !data.user) {
             console.warn('从Supabase获取用户失败:', error)
-            return getCurrentUser() // 回退到同步方法
+            _currentUser = getCurrentUser() // 回退到同步方法
+            return _currentUser
         }
 
         _currentUser = {
@@ -93,10 +94,14 @@ export const fetchCurrentUser = async (): Promise<User> => {
             last_login: data.user.last_sign_in_at
         }
 
+        // 同时更新currentUser属性
+        if (authService) authService.currentUser = _currentUser
+
         return _currentUser
     } catch (error) {
         console.error('异步获取用户信息失败:', error)
-        return getCurrentUser() // 回退到同步方法
+        _currentUser = getCurrentUser() // 回退到同步方法
+        return _currentUser
     }
 }
 
@@ -105,8 +110,58 @@ export const authService = {
     getCurrentUser,
     fetchCurrentUser,
     login: async (email: string, password: string) => {
-        // 待实现
-        return null
+        try {
+            const { data, error } = await supabase.auth.signInWithPassword({
+                email,
+                password
+            })
+
+            if (error) throw error
+
+            // 更新用户信息
+            if (data.user) {
+                _currentUser = {
+                    id: data.user.id,
+                    email: data.user.email || 'anonymous@example.com',
+                    created_at: data.user.created_at || new Date().toISOString(),
+                    last_login: data.user.last_sign_in_at
+                }
+
+                // 设置currentUser属性
+                authService.currentUser = _currentUser
+            }
+
+            return data.user
+        } catch (error) {
+            console.error('登录失败:', error)
+            return null
+        }
+    },
+    // 添加注册方法
+    register: async (email: string, password: string) => {
+        try {
+            const { data, error } = await supabase.auth.signUp({
+                email,
+                password
+            })
+
+            if (error) throw error
+            return data.user
+        } catch (error) {
+            console.error('注册失败:', error)
+            throw error
+        }
+    },
+    // 添加重置密码方法
+    resetPassword: async (email: string) => {
+        try {
+            const { error } = await supabase.auth.resetPasswordForEmail(email)
+            if (error) throw error
+            return true
+        } catch (error) {
+            console.error('重置密码失败:', error)
+            throw error
+        }
     },
     logout: async () => {
         try {
@@ -126,29 +181,52 @@ export const authService = {
     init: async () => {
         // 尝试从本地存储恢复会话
         try {
-            const { data, error } = await supabase.auth.getSession()
-            if (data.session) {
-                _currentUser = {
-                    id: data.session.user.id,
-                    email: data.session.user.email || 'anonymous@example.com',
-                    created_at: data.session.user.created_at || new Date().toISOString(),
-                    last_login: data.session.user.last_sign_in_at
-                }
-                // 同时更新currentUser属性
-                authService.currentUser = _currentUser
-                console.log('已从会话恢复用户:', _currentUser.email)
-            } else {
-                // 如果没有会话，设置为当前用户
+            // 使用getSession检查现有会话
+            const { data: sessionData, error: sessionError } = await supabase.auth.getSession()
+
+            if (sessionError) {
+                console.error('获取会话失败:', sessionError)
                 _currentUser = getCurrentUser()
                 authService.currentUser = _currentUser
+                return false
             }
+
+            if (sessionData.session) {
+                // 如果有会话，使用getUser验证会话
+                const { data: userData, error: userError } = await supabase.auth.getUser()
+
+                if (userError) {
+                    console.error('验证用户失败:', userError)
+                    _currentUser = getCurrentUser()
+                    authService.currentUser = _currentUser
+                    return false
+                }
+
+                if (userData.user) {
+                    _currentUser = {
+                        id: userData.user.id,
+                        email: userData.user.email || 'anonymous@example.com',
+                        created_at: userData.user.created_at || new Date().toISOString(),
+                        last_login: userData.user.last_sign_in_at
+                    }
+                    // 同时更新currentUser属性
+                    authService.currentUser = _currentUser
+                    console.log('已从会话恢复用户:', _currentUser.email)
+                    return true
+                }
+            }
+
+            // 如果没有会话，设置为当前用户
+            _currentUser = getCurrentUser()
+            authService.currentUser = _currentUser
+            return true
         } catch (error) {
             console.error('初始化认证服务失败:', error)
             // 出错时设置为当前用户
             _currentUser = getCurrentUser()
             authService.currentUser = _currentUser
+            return false
         }
-        return true
     },
     isUserAuthenticated: (): boolean => {
         // 检查用户是否已认证(非匿名/访客)

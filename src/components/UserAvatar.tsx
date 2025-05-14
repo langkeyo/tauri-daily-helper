@@ -10,18 +10,25 @@ export default function UserAvatar() {
     const [dropdownOpen, setDropdownOpen] = useState(false)
     const dropdownRef = useRef<HTMLDivElement>(null)
 
-    // 初始化
-    useEffect(() => {
-        // 获取当前用户
+    // 更新用户状态
+    const updateUserStatus = () => {
         const currentUser = authService.getCurrentUser()
         setUser(currentUser)
         setIsAuthenticated(authService.isUserAuthenticated())
+        console.log('用户状态更新:', currentUser, '认证状态:', authService.isUserAuthenticated())
+    }
+
+    // 初始化
+    useEffect(() => {
+        // 初始获取用户状态
+        updateUserStatus()
 
         // 监听认证状态变化
         const handleAuthChange = (e: CustomEvent) => {
             const { isAuthenticated, user } = e.detail
             setIsAuthenticated(isAuthenticated)
             setUser(user)
+            console.log('认证状态变化:', isAuthenticated, user)
         }
 
         window.addEventListener('auth_change', handleAuthChange as EventListener)
@@ -41,10 +48,18 @@ export default function UserAvatar() {
         }
     }, [])
 
+    // 监听dropdownOpen变化，每次打开下拉菜单时更新用户状态
+    useEffect(() => {
+        if (dropdownOpen) {
+            updateUserStatus()
+        }
+    }, [dropdownOpen])
+
     // 处理登出
     const handleLogout = async () => {
         try {
             await authService.logout()
+            updateUserStatus() // 登出后立即更新用户状态
             setDropdownOpen(false)
         } catch (error) {
             console.error('登出失败:', error)
@@ -54,7 +69,7 @@ export default function UserAvatar() {
 
     // 获取用户头像
     const getInitials = (email: string) => {
-        if (!email || email === 'anonymous@local') return '游'
+        if (!email || email === 'anonymous@local' || email === 'guest@example.com') return '游'
         return email.charAt(0).toUpperCase()
     }
 

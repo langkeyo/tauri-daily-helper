@@ -2,6 +2,7 @@
 import { useState, useRef, useEffect } from "react"
 import { invoke } from "@tauri-apps/api/core"
 import './weekly-modern.css'
+import { fetchWeeklyDailies } from './fetchWeeklyDailies'
 
 // 定义Task接口类型
 interface Task {
@@ -101,25 +102,19 @@ export default function WeeklyPage() {
 
     // 获取本周日报
     useEffect(() => {
-        const fetchWeeklyDailies = async () => {
+        const loadWeeklyDailies = async () => {
             try {
                 const start = weekly.start_date
                 const end = weekly.end_date
-                // 假设有 get_dailies_by_range tauri 命令，否则用 get_recent_daily_reports 并手动过滤
-                let dailies: DailyReport[] = []
-                try {
-                    dailies = await invoke<DailyReport[]>("get_dailies_by_range", { start, end })
-                } catch {
-                    // fallback: get_recent_daily_reports + 过滤
-                    const all = await invoke<DailyReport[]>("get_recent_daily_reports")
-                    dailies = all.filter(d => d.date >= start && d.date <= end)
-                }
+
+                // 使用新的辅助函数获取日报
+                const dailies = await fetchWeeklyDailies(start, end)
                 setDailyList(dailies)
             } catch (e) {
                 setStatus("加载本周日报失败: " + e)
             }
         }
-        fetchWeeklyDailies()
+        loadWeeklyDailies()
     }, [weekly.start_date, weekly.end_date])
 
     // 添加任务行
@@ -375,16 +370,18 @@ export default function WeeklyPage() {
             {/* 左侧：本周日报列表 */}
             <div className="weekly-left">
                 <h2>本周日报</h2>
-                <div className="weekly-daily-list">
-                    {dailyList.length === 0 && <div className="empty-tip">暂无本周日报</div>}
-                    {dailyList.map((d, idx) => (
-                        <div key={d.date} className="daily-item">
-                            <div><b>{d.date}</b> <span className="daily-task-id">{d.task_id}</span></div>
-                            <div className="daily-completed">已完成：{d.completed || <span style={{ color: '#bbb' }}>无</span>}</div>
-                        </div>
-                    ))}
+                <div className="weekly-card">
+                    <div className="weekly-daily-list">
+                        {dailyList.length === 0 && <div className="empty-tip">暂无本周日报</div>}
+                        {dailyList.map((d, idx) => (
+                            <div key={`${d.date}-${idx}`} className="daily-item">
+                                <div><b>{d.date}</b> <span className="daily-task-id">{d.task_id}</span></div>
+                                <div className="daily-completed">已完成：{d.completed || <span style={{ color: '#bbb' }}>无</span>}</div>
+                            </div>
+                        ))}
+                    </div>
+                    <button className="primary-btn" onClick={fillQuantitative}>一键填充任务明细</button>
                 </div>
-                <button className="primary-btn" onClick={fillQuantitative}>一键填充任务明细</button>
             </div>
 
             {/* 右侧：周报编辑区 */}
@@ -411,40 +408,42 @@ export default function WeeklyPage() {
 
                     {/* 岗位任务明细表 */}
                     <h3 style={{ marginBottom: 10, fontSize: 16 }}>前端岗位工作明细</h3>
-                    <div className="task-table">
-                        <div className="task-table-header">
-                            <span>日期</span>
-                            <span>任务编号</span>
-                            <span>任务名称</span>
-                            <span>任务描述</span>
-                            <span>预计开始</span>
-                            <span>预计完成</span>
-                            <span>优先级</span>
-                            <span>预计工时</span>
-                            <span>实际工时</span>
-                            <span>状态</span>
-                            <span>量化指标</span>
-                            <span>备注</span>
-                            <span></span>
-                        </div>
-
-                        {tasks.map((task, idx) => (
-                            <div className="task-table-row" key={idx}>
-                                <input value={task.date || ''} onChange={e => updateTask(idx, 'date', e.target.value)} placeholder="日期" />
-                                <input value={task.task_id || ''} onChange={e => updateTask(idx, 'task_id', e.target.value)} placeholder="编号" />
-                                <input value={task.task_name || ''} onChange={e => updateTask(idx, 'task_name', e.target.value)} placeholder="名称" />
-                                <input value={task.task || ''} onChange={e => updateTask(idx, 'task', e.target.value)} placeholder="描述" />
-                                <input value={task.plan_start_time || ''} onChange={e => updateTask(idx, 'plan_start_time', e.target.value)} placeholder="预计开始" />
-                                <input value={task.plan_end_time || ''} onChange={e => updateTask(idx, 'plan_end_time', e.target.value)} placeholder="预计完成" />
-                                <input value={task.priority || ''} onChange={e => updateTask(idx, 'priority', e.target.value)} placeholder="优先级" />
-                                <input value={task.plan_hours || ''} onChange={e => updateTask(idx, 'plan_hours', e.target.value)} placeholder="预计工时" />
-                                <input value={task.actual_hours || ''} onChange={e => updateTask(idx, 'actual_hours', e.target.value)} placeholder="实际工时" />
-                                <input value={task.status || ''} onChange={e => updateTask(idx, 'status', e.target.value)} placeholder="状态" />
-                                <input value={task.quantitative || ''} onChange={e => updateTask(idx, 'quantitative', e.target.value)} placeholder="量化指标" />
-                                <input value={task.remarks || ''} onChange={e => updateTask(idx, 'remarks', e.target.value)} placeholder="备注" />
-                                <button className="delete-btn" onClick={() => removeTask(idx)}>×</button>
+                    <div className="weekly-table-container">
+                        <div className="task-table">
+                            <div className="task-table-header">
+                                <span>日期</span>
+                                <span>任务编号</span>
+                                <span>任务名称</span>
+                                <span>任务描述</span>
+                                <span>预计开始</span>
+                                <span>预计完成</span>
+                                <span>优先级</span>
+                                <span>预计工时</span>
+                                <span>实际工时</span>
+                                <span>状态</span>
+                                <span>量化指标</span>
+                                <span>备注</span>
+                                <span></span>
                             </div>
-                        ))}
+
+                            {tasks.map((task, idx) => (
+                                <div className="task-table-row" key={idx}>
+                                    <input value={task.date || ''} onChange={e => updateTask(idx, 'date', e.target.value)} placeholder="日期" />
+                                    <input value={task.task_id || ''} onChange={e => updateTask(idx, 'task_id', e.target.value)} placeholder="编号" />
+                                    <input value={task.task_name || ''} onChange={e => updateTask(idx, 'task_name', e.target.value)} placeholder="名称" />
+                                    <input value={task.task || ''} onChange={e => updateTask(idx, 'task', e.target.value)} placeholder="描述" />
+                                    <input value={task.plan_start_time || ''} onChange={e => updateTask(idx, 'plan_start_time', e.target.value)} placeholder="预计开始" />
+                                    <input value={task.plan_end_time || ''} onChange={e => updateTask(idx, 'plan_end_time', e.target.value)} placeholder="预计完成" />
+                                    <input value={task.priority || ''} onChange={e => updateTask(idx, 'priority', e.target.value)} placeholder="优先级" />
+                                    <input value={task.plan_hours || ''} onChange={e => updateTask(idx, 'plan_hours', e.target.value)} placeholder="预计工时" />
+                                    <input value={task.actual_hours || ''} onChange={e => updateTask(idx, 'actual_hours', e.target.value)} placeholder="实际工时" />
+                                    <input value={task.status || ''} onChange={e => updateTask(idx, 'status', e.target.value)} placeholder="状态" />
+                                    <input value={task.quantitative || ''} onChange={e => updateTask(idx, 'quantitative', e.target.value)} placeholder="量化指标" />
+                                    <input value={task.remarks || ''} onChange={e => updateTask(idx, 'remarks', e.target.value)} placeholder="备注" />
+                                    <button className="delete-btn" onClick={() => removeTask(idx)}>×</button>
+                                </div>
+                            ))}
+                        </div>
                     </div>
 
                     <button className="secondary-btn" onClick={addTask} style={{ marginTop: 10 }}>+ 添加任务</button>
@@ -457,7 +456,7 @@ export default function WeeklyPage() {
 
                     {/* 操作按钮 */}
                     <div className="task-table-actions">
-                        <button className="primary-btn" onClick={exportToExcel}>导出Excel</button>
+                        <button className="secondary-btn" onClick={exportToExcel}>导出Excel</button>
                         <button className="secondary-btn" onClick={() => fileInputRef.current?.click()}>导入模板</button>
                         <input type="file" ref={fileInputRef} style={{ display: 'none' }} accept=".xlsx,.xls" onChange={e => handleTemplateFile(e.target.files)} />
                         <button className="secondary-btn" onClick={saveAsTemplate}>保存模板</button>

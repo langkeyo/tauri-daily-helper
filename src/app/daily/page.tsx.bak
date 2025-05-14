@@ -399,7 +399,7 @@ export default function DailyPage() {
         <div className="p-4 max-w-5xl mx-auto">
             {/* 全局加载遮罩 */}
             {pageLoading && (
-                <div className="fixed inset-0 bg-opacity-20 bg-gray-50 flex items-center justify-center z-50">
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
                     <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-lg text-center">
                         <div className="w-16 h-16 border-4 border-t-blue-500 border-blue-200 rounded-full animate-spin mx-auto mb-4"></div>
                         <p className="text-gray-700 dark:text-gray-300">正在加载数据，请稍候...</p>

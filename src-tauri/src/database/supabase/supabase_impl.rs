@@ -111,7 +111,7 @@ async fn save_daily_to_supabase_with_user_id(report: &DailyReport, client: &Clie
     eprintln!("使用{}方法保存到URL: {}", method, url);
     
     // 创建一个新的JSON对象，确保包含所有必要字段
-    let mut report_json = serde_json::json!({
+    let report_json = serde_json::json!({
         "date": report.date,
         "user_id": effective_user_id,  // 使用确保有效的用户ID
         "task_id": report.task_id,
@@ -125,11 +125,7 @@ async fn save_daily_to_supabase_with_user_id(report: &DailyReport, client: &Clie
     });
     
     // 如果是UPDATE操作，不要包含id字段
-    // 如果是INSERT操作，设置一个id值（Supabase会忽略并使用自己的序列）
-    if !existing_report {
-        // 为新增设置一个临时ID，服务端会替换它
-        report_json["id"] = serde_json::json!(1);
-    }
+    // 如果是INSERT操作，不设置id值，让Supabase自动生成
     
     eprintln!("请求数据: {}", serde_json::to_string_pretty(&report_json).unwrap_or_default());
     
@@ -244,7 +240,7 @@ async fn save_daily_to_supabase_without_user_id(report: &DailyReport, client: &C
     };
     
     // 创建不包含user_id的JSON对象
-    let mut report_json = serde_json::json!({
+    let report_json = serde_json::json!({
         "date": report.date,
         "task_id": report.task_id,
         "task_name": report.task_name,
@@ -255,11 +251,6 @@ async fn save_daily_to_supabase_without_user_id(report: &DailyReport, client: &C
         "actual_hours": report.actual_hours,
         "remarks": report.remarks
     });
-    
-    // 如果是INSERT操作，设置一个id值
-    if !existing_report {
-        report_json["id"] = serde_json::json!(1);
-    }
     
     // 最多尝试3次
     for attempt in 1..=3 {

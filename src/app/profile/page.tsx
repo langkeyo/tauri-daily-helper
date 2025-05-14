@@ -39,21 +39,32 @@ export default function ProfilePage() {
                 setEmail(currentUser.email || '')
 
                 // 加载完整的用户资料
-                const { data, error } = await supabase
-                    .from('user_profiles')
-                    .select('*')
-                    .eq('user_id', currentUser.id)
-                    .single()
+                try {
+                    const { data, error } = await supabase
+                        .from('user_profiles')
+                        .select('*')
+                        .eq('user_id', currentUser.id)
+                        .maybeSingle()
 
-                if (error) {
-                    console.error('加载用户资料失败:', error)
-                    // 用户资料可能不存在，但不阻止页面显示
-                } else if (data) {
-                    // 设置用户资料
-                    setName(data.name || '')
-                    setDepartment(data.department || '')
-                    setPosition(data.position || '')
-                    setAvatar(data.avatar_url || '')
+                    if (error) {
+                        console.error('加载用户资料失败:', error.message || JSON.stringify(error))
+                        // 检查是否是表不存在的错误
+                        if (error.code === '42P01') {
+                            console.log('user_profiles表不存在，将在首次保存时创建')
+                            // 表不存在，但不阻止页面显示
+                        } else {
+                            toast.error(`加载用户资料失败: ${error.message || '未知错误'}`)
+                        }
+                    } else if (data) {
+                        // 设置用户资料
+                        setName(data.name || '')
+                        setDepartment(data.department || '')
+                        setPosition(data.position || '')
+                        setAvatar(data.avatar_url || '')
+                    }
+                } catch (error: any) {
+                    console.error('加载用户资料时发生异常:', error)
+                    toast.error(`加载用户资料失败: ${error?.message || '未知错误'}`)
                 }
             } catch (error) {
                 console.error('加载用户信息失败:', error)
@@ -92,36 +103,66 @@ export default function ProfilePage() {
             }
 
             // 检查资料是否已存在
-            const { data: existingProfile } = await supabase
-                .from('user_profiles')
-                .select('user_id')
-                .eq('user_id', user.id)
-                .single()
-
-            let result
-
-            if (existingProfile) {
-                // 更新现有资料
-                result = await supabase
+            try {
+                const { data: existingProfile, error: checkError } = await supabase
                     .from('user_profiles')
-                    .update(profileData)
+                    .select('user_id')
                     .eq('user_id', user.id)
-            } else {
-                // 创建新资料
-                profileData.created_at = new Date().toISOString()
-                result = await supabase
-                    .from('user_profiles')
-                    .insert([profileData])
-            }
+                    .maybeSingle()
 
-            if (result.error) {
-                throw result.error
-            }
+                if (checkError) {
+                    // 检查是否是表不存在错误
+                    if (checkError.code === '42P01') {
+                        console.log('user_profiles表不存在，尝试创建...')
 
-            toast.success('个人资料已更新')
+                        // 尝试自动创建表
+                        const createTableResult = await supabase.rpc('create_profiles_table_if_not_exists')
+                        console.log('创建表结果:', createTableResult)
+
+                        // 创建新资料
+                        profileData.created_at = new Date().toISOString()
+                        const result = await supabase
+                            .from('user_profiles')
+                            .insert([profileData])
+
+                        if (result.error) {
+                            if (result.error.code === '42P01') {
+                                throw new Error('无法创建user_profiles表，请联系管理员')
+                            }
+                            throw result.error
+                        }
+                    } else {
+                        throw checkError
+                    }
+                } else {
+                    let result
+                    if (existingProfile) {
+                        // 更新现有资料
+                        result = await supabase
+                            .from('user_profiles')
+                            .update(profileData)
+                            .eq('user_id', user.id)
+                    } else {
+                        // 创建新资料
+                        profileData.created_at = new Date().toISOString()
+                        result = await supabase
+                            .from('user_profiles')
+                            .insert([profileData])
+                    }
+
+                    if (result.error) {
+                        throw result.error
+                    }
+                }
+
+                toast.success('个人资料已更新')
+            } catch (error: any) {
+                console.error('保存用户资料失败:', error)
+                toast.error(`保存失败: ${error.message || '未知错误'}`)
+                throw error
+            }
         } catch (error) {
-            console.error('保存用户资料失败:', error)
-            toast.error('保存用户资料失败')
+            console.error('保存用户资料错误:', error)
         } finally {
             setIsSaving(false)
         }
@@ -263,7 +304,15 @@ export default function ProfilePage() {
                             <Button
                                 variant="outline"
                                 className="w-full mt-4 text-blue-600 border-blue-300 hover:bg-blue-50 dark:text-blue-400 dark:border-blue-800 dark:hover:bg-blue-900/20 transition-colors"
-                                onClick={() => toast.success('数据已同步')}
+                                onClick={() => {
+                                    // 检查用户是否已登录
+                                    if (!user || user.id === 'guest') {
+                                        toast.error('请先登录')
+                                        router.push('/login')
+                                        return
+                                    }
+                                    toast.success('数据已同步')
+                                }}
                             >
                                 立即同步
                             </Button>

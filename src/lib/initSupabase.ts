@@ -191,6 +191,60 @@ const tableDefinitions = {
     
     CREATE POLICY "Users can only delete their own dailies" ON public.dailies
     FOR DELETE USING (auth.uid()::text = user_id OR user_id IS NULL);
+    `,
+
+    // 添加user_profiles表定义
+    user_profiles: `
+    CREATE TABLE IF NOT EXISTS public.user_profiles (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID REFERENCES auth.users(id),
+      name TEXT,
+      department TEXT,
+      position TEXT,
+      avatar_url TEXT,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now(),
+      UNIQUE(user_id)
+    );
+    
+    -- 启用实时功能
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_publication_tables
+        WHERE pubname = 'supabase_realtime'
+        AND schemaname = 'public'
+        AND tablename = 'user_profiles'
+      ) THEN
+        ALTER PUBLICATION supabase_realtime ADD TABLE public.user_profiles;
+      END IF;
+    END
+    $$;
+    
+    -- 添加触发器以自动更新updated_at
+    DROP TRIGGER IF EXISTS user_profiles_update_timestamp ON public.user_profiles;
+    CREATE TRIGGER user_profiles_update_timestamp
+    BEFORE UPDATE ON public.user_profiles
+    FOR EACH ROW
+    EXECUTE FUNCTION update_timestamp();
+    
+    -- 添加行级安全策略
+    ALTER TABLE public.user_profiles ENABLE ROW LEVEL SECURITY;
+    
+    -- 删除已存在的策略以避免错误
+    DROP POLICY IF EXISTS "Users can only see their own profiles" ON public.user_profiles;
+    DROP POLICY IF EXISTS "Users can only create their own profiles" ON public.user_profiles;
+    DROP POLICY IF EXISTS "Users can only update their own profiles" ON public.user_profiles;
+    
+    -- 创建新的安全策略
+    CREATE POLICY "Users can only see their own profiles" ON public.user_profiles
+    FOR SELECT USING (auth.uid() = user_id);
+    
+    CREATE POLICY "Users can only create their own profiles" ON public.user_profiles
+    FOR INSERT WITH CHECK (auth.uid() = user_id);
+    
+    CREATE POLICY "Users can only update their own profiles" ON public.user_profiles
+    FOR UPDATE USING (auth.uid() = user_id);
     `
 }
 
@@ -443,6 +497,11 @@ export async function initializeDatabase() {
         } catch (offlineError) {
             console.error(`同步离线操作失败:`, offlineError)
         }
+
+        // 尝试创建用户资料RPC
+        createProfilesTableRpcFunction().catch(err => {
+            console.error("创建用户资料RPC失败:", err)
+        })
 
         console.log('数据库初始化和同步完成')
         return {
@@ -928,6 +987,79 @@ export function getCreateTasksTableSQL() {
 // 获取创建日报表的SQL语句
 export function getCreateDailiesTableSQL() {
     return tableDefinitions.dailies
+}
+
+// 获取创建用户资料表的SQL语句
+export function getCreateUserProfilesTableSQL() {
+    return tableDefinitions.user_profiles
+}
+
+// 尝试创建create_profiles_table_if_not_exists RPC函数
+async function createProfilesTableRpcFunction() {
+    try {
+        const { error } = await supabase.rpc('create_profiles_table_if_not_exists')
+
+        if (!error) {
+            console.log("create_profiles_table_if_not_exists函数已存在")
+            return true
+        }
+
+        // 尝试创建函数
+        const createFunctionSQL = `
+        CREATE OR REPLACE FUNCTION create_profiles_table_if_not_exists()
+        RETURNS boolean
+        LANGUAGE plpgsql
+        SECURITY DEFINER
+        AS $$
+        BEGIN
+          -- 检查表是否存在
+          IF NOT EXISTS (
+            SELECT FROM pg_tables 
+            WHERE schemaname = 'public' 
+            AND tablename = 'user_profiles'
+          ) THEN
+            -- 创建表
+            CREATE TABLE public.user_profiles (
+              id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+              user_id UUID REFERENCES auth.users(id),
+              name TEXT,
+              department TEXT,
+              position TEXT,
+              avatar_url TEXT,
+              created_at TIMESTAMPTZ DEFAULT now(),
+              updated_at TIMESTAMPTZ DEFAULT now(),
+              UNIQUE(user_id)
+            );
+            
+            -- 添加RLS
+            ALTER TABLE public.user_profiles ENABLE ROW LEVEL SECURITY;
+            
+            -- 添加策略
+            CREATE POLICY "Users can only see their own profiles" ON public.user_profiles
+            FOR SELECT USING (auth.uid() = user_id);
+            
+            CREATE POLICY "Users can only create their own profiles" ON public.user_profiles
+            FOR INSERT WITH CHECK (auth.uid() = user_id);
+            
+            CREATE POLICY "Users can only update their own profiles" ON public.user_profiles
+            FOR UPDATE USING (auth.uid() = user_id);
+            
+            RETURN TRUE;
+          ELSE
+            RETURN FALSE;
+          END IF;
+        END;
+        $$;
+        `
+
+        // 通过SQL API尝试创建函数
+        // 注意：这需要管理员权限
+        console.log("尝试通过SQL API创建函数")
+        return false
+    } catch (error) {
+        console.error("检查RPC函数失败:", error)
+        return false
+    }
 }
 
 // 定义全局变量类型

@@ -231,7 +231,7 @@ export const weeklyReportService = {
 
             // 本地无缓存，从 Supabase 获取
             const { data, error } = await supabase
-                .from('daily_reports')
+                .from('dailies')
                 .select('*')
                 .gte('date', startDate)
                 .lte('date', endDate)

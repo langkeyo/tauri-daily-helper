@@ -1,8 +1,20 @@
 "use client"
 import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
-import { Card, Input, Button } from "@/components/ui"
+import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter, Button } from "@/components/ui"
 import { authService } from "@/lib/services"
+import { LockIcon, MailIcon, Loader2 } from "lucide-react"
+
+// 添加tailwind css动画类声明
+const tailwindAnims = `
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.animate-fadeIn {
+  animation: fadeIn 0.3s ease-in-out;
+}
+`
 
 export default function LoginPage() {
     const router = useRouter()
@@ -136,70 +148,125 @@ export default function LoginPage() {
     }
 
     return (
-        <div className="flex justify-center items-center min-h-[calc(100vh-80px)]">
-            <Card
-                title={isLogin ? "用户登录" : "用户注册"}
-                subtitle={isLogin ? "登录您的账户以使用云同步功能" : "创建新账户以使用云同步功能"}
-                className="w-full max-w-md"
-            >
-                <form onSubmit={handleSubmit} className="space-y-4">
-                    <div className="space-y-2">
+        <div className="min-h-screen flex flex-col items-center justify-center p-4 bg-gradient-to-b from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800">
+            <div className="w-full max-w-md space-y-6">
+                <div className="text-center">
+                    <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">
+                        Tauri Daily Helper
+                    </h1>
+                    <p className="mt-2 text-gray-600 dark:text-gray-400">
+                        {isLogin ? '登录您的账户，开始每日规划' : '创建账户，开始您的高效之旅'}
+                    </p>
+                </div>
+
+                <Card className="overflow-hidden shadow-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 transition-all duration-300">
+                    <CardHeader className="space-y-1 pb-2 pt-6">
+                        <CardTitle className="text-xl text-center font-semibold">
+                            {isLogin ? '欢迎回来' : '注册新账户'}
+                        </CardTitle>
+                        <CardDescription className="text-center text-gray-500 dark:text-gray-400">
+                            {isLogin ? '登录后即可使用云同步功能' : '创建账户来同步您的数据'}
+                        </CardDescription>
+                    </CardHeader>
+
+                    <CardContent className="space-y-4 pt-4 px-6 sm:px-8">
                         {error && (
-                            <div className="error-message">
+                            <div className="p-3 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm rounded-md border border-red-100 dark:border-red-800/50 animate-fadeIn">
                                 {error}
                             </div>
                         )}
 
                         {message && (
-                            <div className="success-message">
+                            <div className="p-3 bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400 text-sm rounded-md border border-green-100 dark:border-green-800/50 animate-fadeIn">
                                 {message}
                             </div>
                         )}
-                    </div>
 
-                    <Input
-                        label="邮箱"
-                        type="email"
-                        placeholder="请输入邮箱"
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                        required
-                    />
+                        <form onSubmit={handleSubmit} className="space-y-4">
+                            <div className="space-y-1">
+                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                                    邮箱
+                                </label>
+                                <div className="relative">
+                                    <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none">
+                                        <MailIcon className="h-4 w-4 text-gray-400" />
+                                    </div>
+                                    <input
+                                        type="email"
+                                        placeholder="您的邮箱地址"
+                                        value={email}
+                                        onChange={(e) => setEmail(e.target.value)}
+                                        className="w-full pl-10 pr-3 py-2 border rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200"
+                                        style={{ textIndent: "25px" }}
+                                        required
+                                    />
+                                </div>
+                            </div>
 
-                    <Input
-                        label="密码"
-                        type="password"
-                        placeholder="请输入密码"
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        required
-                    />
+                            <div className="space-y-1">
+                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                                    密码
+                                </label>
+                                <div className="relative">
+                                    <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none">
+                                        <LockIcon className="h-4 w-4 text-gray-400" />
+                                    </div>
+                                    <input
+                                        type="password"
+                                        placeholder="您的密码"
+                                        value={password}
+                                        onChange={(e) => setPassword(e.target.value)}
+                                        className="w-full pl-10 pr-3 py-2 border rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200"
+                                        style={{ textIndent: "25px" }}
+                                        required
+                                    />
+                                </div>
+                            </div>
 
-                    {!isLogin && (
-                        <Input
-                            label="确认密码"
-                            type="password"
-                            placeholder="请再次输入密码"
-                            value={confirmPassword}
-                            onChange={(e) => setConfirmPassword(e.target.value)}
-                            required
-                        />
-                    )}
+                            {!isLogin && (
+                                <div className="space-y-1">
+                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                                        确认密码
+                                    </label>
+                                    <div className="relative">
+                                        <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none">
+                                            <LockIcon className="h-4 w-4 text-gray-400" />
+                                        </div>
+                                        <input
+                                            type="password"
+                                            placeholder="再次输入密码"
+                                            value={confirmPassword}
+                                            onChange={(e) => setConfirmPassword(e.target.value)}
+                                            className="w-full pl-10 pr-3 py-2 border rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200"
+                                            style={{ textIndent: "25px" }}
+                                            required
+                                        />
+                                    </div>
+                                </div>
+                            )}
 
-                    <div className="flex flex-col gap-3 mt-6">
-                        <Button
-                            type="submit"
-                            variant="primary"
-                            loading={isLoading}
-                            className="w-full"
-                        >
-                            {isLogin ? '登录' : '注册'}
-                        </Button>
+                            <Button
+                                type="submit"
+                                variant="primary"
+                                className="w-full h-10 mt-2 bg-blue-600 hover:bg-blue-700 text-white transition-colors duration-200"
+                            >
+                                {isLoading ? (
+                                    <span className="flex items-center justify-center">
+                                        <Loader2 className="animate-spin mr-2 h-4 w-4" />
+                                        <span>{isLogin ? '登录中...' : '注册中...'}</span>
+                                    </span>
+                                ) : (
+                                    <span>{isLogin ? '登录' : '注册'}</span>
+                                )}
+                            </Button>
+                        </form>
+                    </CardContent>
 
-                        <div className="flex justify-between items-center mt-2 text-sm">
+                    <CardFooter className="flex flex-col gap-3 pb-6 pt-1 px-6 sm:px-8">
+                        <div className="flex justify-between items-center w-full text-sm">
                             <button
                                 type="button"
-                                className="text-blue-500 hover:text-blue-700"
+                                className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 font-medium transition-colors duration-200"
                                 onClick={toggleMode}
                             >
                                 {isLogin ? '没有账户？去注册' : '已有账户？去登录'}
@@ -208,7 +275,7 @@ export default function LoginPage() {
                             {isLogin && (
                                 <button
                                     type="button"
-                                    className="text-gray-500 hover:text-gray-700"
+                                    className="text-gray-600 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-300 transition-colors duration-200"
                                     onClick={handleForgotPassword}
                                 >
                                     忘记密码？
@@ -220,20 +287,32 @@ export default function LoginPage() {
                         {error && error.includes('邮箱未验证') && (
                             <button
                                 type="button"
-                                className="text-blue-500 hover:text-blue-700 mt-2 text-sm w-full"
+                                className="text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 text-sm w-full transition-colors duration-200"
                                 onClick={resendVerificationEmail}
                             >
                                 重新发送验证邮件
                             </button>
                         )}
-                    </div>
-                </form>
 
-                <div className="mt-8 text-center text-sm text-gray-500">
-                    <p>未登录时，数据仅存储在本地设备</p>
-                    <p>登录后可使用云同步，跨设备访问您的数据</p>
-                </div>
-            </Card>
+                        <div className="relative w-full my-2">
+                            <div className="absolute inset-0 flex items-center">
+                                <div className="w-full border-t border-gray-200 dark:border-gray-700"></div>
+                            </div>
+                            <div className="relative flex justify-center text-xs">
+                                <span className="px-2 bg-white dark:bg-gray-800 text-gray-500">
+                                    本地与云端同步
+                                </span>
+                            </div>
+                        </div>
+
+                        <p className="text-center text-xs text-gray-500 dark:text-gray-400">
+                            未登录时数据仅存储在本地设备<br />登录后可使用云同步功能
+                        </p>
+                    </CardFooter>
+                </Card>
+            </div>
+
+            <style jsx global>{tailwindAnims}</style>
         </div>
     )
 } 
