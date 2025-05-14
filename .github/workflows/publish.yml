@@ -65,4 +65,4 @@ jobs:
           releaseDraft: true # 创建为草稿，允许发布前编辑
           prerelease: false # 不标记为预发布版本
           # macOS平台构建Universal Binary，其他平台不需要此参数
-          args: ${{ matrix.platform == 'macos-latest' && '--target universal-apple-darwin' || '' }} 
+          args: ${{ matrix.platform == 'macos-latest' && '-- --target universal-apple-darwin' || '' }} 
