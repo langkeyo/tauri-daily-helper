@@ -49,17 +49,9 @@ jobs:
         run: npm install
       
       - name: 构建应用
-        if: matrix.platform != 'macos-latest'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # macOS签名设置 - 如需签名请取消注释并设置适当的secrets
-          # APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          # APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          # APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          # APPLE_ID: ${{ secrets.APPLE_ID }}
-          # APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          # APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           tagName: ${{ github.ref_name }} # 自动使用推送的标签名
           releaseName: "日报助手 v__VERSION__" # __VERSION__将被自动替换为应用版本
@@ -72,23 +64,5 @@ jobs:
             请下载对应您操作系统的安装包进行安装。
           releaseDraft: true # 创建为草稿，允许发布前编辑
           prerelease: false # 不标记为预发布版本
-
-      # 针对macOS平台的单独构建步骤
-      - name: 构建macOS Universal版本
-        if: matrix.platform == 'macos-latest'
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: "日报助手 v__VERSION__"
-          releaseBody: |
-            此版本包含以下平台的安装包:
-            - Windows (x64): .msi 和 .exe 安装包
-            - macOS (Intel & Apple Silicon): .dmg 安装包
-            - Linux: .AppImage 和 .deb 安装包
-            
-            请下载对应您操作系统的安装包进行安装。
-          releaseDraft: true
-          prerelease: false
-          args: --target universal-apple-darwin 
+          # macOS平台构建Universal Binary，其他平台不需要此参数
+          args: ${{ matrix.platform == 'macos-latest' && '--target universal-apple-darwin' || '' }} 
