@@ -73,4 +73,4 @@ jobs:
           prerelease: false # 不标记为预发布版本
           
           # 针对macOS平台的特殊构建参数 - 创建Universal Binary (同时支持Intel和Apple Silicon)
-          args: ${{ matrix.platform == 'macos-latest' && '--target universal-apple-darwin' || '' }} 
+          args: ${{ matrix.platform == 'macos-latest' && '--target=universal-apple-darwin' || '' }} 
